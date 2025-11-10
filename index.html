@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Esmart-Compiler</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div id="root"></div>
+    <script type="text/babel">
+       
+        class Node {
+            constructor(type, value = null, children = []) {
+                this.type = type;
+                this.value = value;
+                this.children = children;
+            }
+        }
+
+        
+        class Parser {
+            constructor() {
+                this.lines = [];
+                this.current = 0;
+            }
+
+            tokenizeLine(line) {
+                const tokens = [];
+                let currentToken = '';
+                let inString = false;
+                let quoteChar = null;
+                
+                for (const char of line) {
+                    if ((char === '"' || char === "'") && !inString) {
+                        if (currentToken.trim()) {
+                            tokens.push(currentToken.trim());
+                            currentToken = '';
+                        }
+                        inString = true;
+                        quoteChar = char;
+                        currentToken = char;
+                    } else if (char === quoteChar && inString) {
+                        inString = false;
+                        currentToken += char;
+                        tokens.push(currentToken);
+                        currentToken = '';
+                        quoteChar = null;
+                    } else if (char.match(/\s/) && !inString) {
+                        if (currentToken.trim()) {
+                            tokens.push(currentToken.trim());
+                            currentToken = '';
+                        }
+                    } else {
+                        currentToken += char;
+                    }
+                }
+                
+                if (currentToken.trim()) {
+                    tokens.push(currentToken.trim());
+                }
+                
+                return tokens;
+            }
+
+            preprocessCode(code) {
+                
+                const lines = code.split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line && !line.startsWith('#'));
+                
+                this.lines = lines.map(line => this.tokenizeLine(line));
+                this.current = 0;
+            }
+
+            parseIfStatement() {
+                const currentLine = this.lines[this.current];
+                if (!currentLine || currentLine[0].toUpperCase() !== 'IF') {
+                    throw new Error("Expected IF statement");
+                }
+
+                
+                const thenIndex = currentLine.findIndex(token => token.toUpperCase() === 'THEN');
+                if (thenIndex === -1) {
+                    throw new Error("Missing THEN in IF statement");
+                }
+                
+                const condition = currentLine.slice(1, thenIndex).join(' ');
+                this.current++; // Move to next line
+
+                
+                const trueBranch = [];
+                while (this.current < this.lines.length) {
+                    const line = this.lines[this.current];
+                    if (line[0].toUpperCase() === 'ELSE' || line[0].toUpperCase() === 'ENDIF') {
+                        break;
+                    }
+                    trueBranch.push(this.parseStatement());
+                }
+
+              
+                const falseBranch = [];
+                if (this.current < this.lines.length && this.lines[this.current][0].toUpperCase() === 'ELSE') {
+                    this.current++; // Skip ELSE
+                    while (this.current < this.lines.length) {
+                        const line = this.lines[this.current];
+                        if (line[0].toUpperCase() === 'ENDIF') {
+                            break;
+                        }
+                        falseBranch.push(this.parseStatement());
+                    }
+                }
+
+              
+                if (this.current >= this.lines.length || this.lines[this.current][0].toUpperCase() !== 'ENDIF') {
+                    throw new Error("Missing ENDIF");
+                }
+                this.current++; // Skip ENDIF
+
+                return new Node('if_statement', condition, [
+                    new Node('true_branch', null, trueBranch),
+                    new Node('false_branch', null, falseBranch)
+                ]);
+            }
+
+            parseWhileLoop() {
+                const currentLine = this.lines[this.current];
+                if (!currentLine || currentLine[0].toUpperCase() !== 'WHILE') {
+                    throw new Error("Expected WHILE statement");
+                }
+
+                
+                const doIndex = currentLine.findIndex(token => token.toUpperCase() === 'DO');
+                if (doIndex === -1) {
+                    throw new Error("Missing DO in WHILE statement");
+                }
+                
+                const condition = currentLine.slice(1, doIndex).join(' ');
+                this.current++;
+
+               
+                const body = [];
+                while (this.current < this.lines.length) {
+                    const line = this.lines[this.current];
+                    if (line[0].toUpperCase() === 'ENDWHILE') {
+                        break;
+                    }
+                    body.push(this.parseStatement());
+                }
+
+                if (this.current >= this.lines.length || this.lines[this.current][0].toUpperCase() !== 'ENDWHILE') {
+                    throw new Error("Missing ENDWHILE");
+                }
+                this.current++; 
+
+                return new Node('while_loop', condition, body);
+            }
+
+            parseStatement() {
+                if (this.current >= this.lines.length) {
+                    throw new Error("Unexpected end of input");
+                }
+
+                const currentLine = this.lines[this.current];
+                const firstToken = currentLine[0].toUpperCase();
+
+                if (firstToken === 'IF') {
+                    return this.parseIfStatement();
+                } else if (firstToken === 'WHILE') {
+                    return this.parseWhileLoop();
+                } else if (firstToken === 'PRINT') {
+                    if (currentLine.length < 2) {
+                        throw new Error("PRINT statement requires an argument");
+                    }
+                    const value = currentLine.slice(1).join(' ');
+                    this.current++;
+                    return new Node('print', value);
+                } else if (['SET', 'LET'].includes(firstToken)) {
+                    if (currentLine.length < 4) {
+                        throw new Error("Assignment statement requires variable, =, and value");
+                    }
+                    const varName = currentLine[1];
+                    if (currentLine[2] !== '=') {
+                        throw new Error("Expected '=' in assignment");
+                    }
+                    const expression = currentLine.slice(3).join(' ');
+                    this.current++;
+                    return new Node('assignment', varName, [
+                        new Node('expression', expression)
+                    ]);
+                } else {
+                    throw new Error(`Unknown command: ${firstToken}`);
+                }
+            }
+
+            parse(code) {
+                this.preprocessCode(code);
+                const statements = [];
+                
+                while (this.current < this.lines.length) {
+                    statements.push(this.parseStatement());
+                }
+                
+                return new Node('program', null, statements);
+            }
+        }
+
+        // yeh function pseudocode ko vaild or invalid batayega
+        const validateSyntax = (pseudocode) => {
+            try {
+                const parser = new Parser();
+                parser.parse(pseudocode);
+                return { is_valid: true };
+            } catch (e) {
+                return { is_valid: false, error: e.message };
+            }
+        };
+
+        // yeh code javascript generate kar rha hai 
+        class JsGenerator {
+            constructor() {
+                this.indentLevel = 0;
+                this.indentStr = "    ";
+                this.variables = new Set();
+            }
+
+            indent() {
+                return this.indentStr.repeat(this.indentLevel);
+            }
+
+            generateProgram(node) {
+                const programParts = [
+                    "function main() {",
+                ];
+                this.indentLevel = 1;
+                for (const child of node.children) {
+                    const generated = this.generateNode(child);
+                    if (generated.includes('\n')) {
+                        programParts.push(generated);
+                    } else {
+                        programParts.push(this.indent() + generated);
+                    }
+                }
+                programParts.push("}");
+                programParts.push("main();");
+                return programParts.join("\n");
+            }
+
+            generateNode(node) {
+                if (node.type === 'if_statement') {
+                    return this.generateIfStatement(node);
+                } else if (node.type === 'while_loop') {
+                    return this.generateWhileLoop(node);
+                } else if (node.type === 'print') {
+                    return this.generatePrint(node);
+                } else if (node.type === 'assignment') {
+                    return this.generateAssignment(node);
+                } else {
+                    throw new Error(`Unknown node type: ${node.type}`);
+                }
+            }
+
+            generateIfStatement(node) {
+                const codeParts = [this.indent() + `if (${node.value}) {`];
+                this.indentLevel++;
+                
+                for (const child of node.children[0].children) {
+                    const generated = this.generateNode(child);
+                    if (generated.includes('\n')) {
+                        codeParts.push(generated);
+                    } else {
+                        codeParts.push(this.indent() + generated);
+                    }
+                }
+                
+                this.indentLevel--;
+                
+                if (node.children[1].children.length > 0) {
+                    codeParts.push(this.indent() + "} else {");
+                    this.indentLevel++;
+                    
+                    for (const child of node.children[1].children) {
+                        const generated = this.generateNode(child);
+                        if (generated.includes('\n')) {
+                            codeParts.push(generated);
+                        } else {
+                            codeParts.push(this.indent() + generated);
+                        }
+                    }
+                    
+                    this.indentLevel--;
+                }
+                
+                codeParts.push(this.indent() + "}");
+                return codeParts.join("\n");
+            }
+
+            generateWhileLoop(node) {
+                const codeParts = [this.indent() + `while (${node.value}) {`];
+                this.indentLevel++;
+                
+                for (const child of node.children) {
+                    const generated = this.generateNode(child);
+                    if (generated.includes('\n')) {
+                        codeParts.push(generated);
+                    } else {
+                        codeParts.push(this.indent() + generated);
+                    }
+                }
+                
+                this.indentLevel--;
+                codeParts.push(this.indent() + "}");
+                return codeParts.join("\n");
+            }
+
+            generatePrint(node) {
+                const value = node.value.trim();
+                if (value.startsWith('"') && value.endsWith('"') || 
+                    value.startsWith("'") && value.endsWith("'")) {
+                    return `console.log(${value});`;
+                }
+                return `console.log(${value});`;
+            }
+
+            generateAssignment(node) {
+                const varName = node.value;
+                const expression = node.children[0].value;
+                
+                if (!this.variables.has(varName)) {
+                    this.variables.add(varName);
+                    return `let ${varName} = ${expression};`;
+                }
+                return `${varName} = ${expression};`;
+            }
+        }
+
+        // C++ generate karega
+        class CppGenerator {
+            constructor() {
+                this.indentLevel = 0;
+                this.indentStr = "    ";
+                this.variables = new Set();
+            }
+
+            indent() {
+                return this.indentStr.repeat(this.indentLevel);
+            }
+
+            generateProgram(node) {
+                const programParts = [
+                    "#include <iostream>",
+                    "#include <string>",
+                    "using namespace std;",
+                    "",
+                    "int main() {",
+                ];
+                this.indentLevel = 1;
+                
+                for (const child of node.children) {
+                    const generated = this.generateNode(child);
+                    if (generated.includes('\n')) {
+                        programParts.push(generated);
+                    } else {
+                        programParts.push(this.indent() + generated);
+                    }
+                }
+                
+                programParts.push(this.indent() + "return 0;");
+                programParts.push("}");
+                return programParts.join("\n");
+            }
+
+            generateNode(node) {
+                if (node.type === 'if_statement') {
+                    return this.generateIfStatement(node);
+                } else if (node.type === 'while_loop') {
+                    return this.generateWhileLoop(node);
+                } else if (node.type === 'print') {
+                    return this.generatePrint(node);
+                } else if (node.type === 'assignment') {
+                    return this.generateAssignment(node);
+                } else {
+                    throw new Error(`Unknown node type: ${node.type}`);
+                }
+            }
+
+            generateIfStatement(node) {
+                const codeParts = [this.indent() + `if (${node.value}) {`];
+                this.indentLevel++;
+                
+                for (const child of node.children[0].children) {
+                    const generated = this.generateNode(child);
+                    if (generated.includes('\n')) {
+                        codeParts.push(generated);
+                    } else {
+                        codeParts.push(this.indent() + generated);
+                    }
+                }
+                
+                this.indentLevel--;
+                
+                if (node.children[1].children.length > 0) {
+                    codeParts.push(this.indent() + "} else {");
+                    this.indentLevel++;
+                    
+                    for (const child of node.children[1].children) {
+                        const generated = this.generateNode(child);
+                        if (generated.includes('\n')) {
+                            codeParts.push(generated);
+                        } else {
+                            codeParts.push(this.indent() + generated);
+                        }
+                    }
+                    
+                    this.indentLevel--;
+                }
+                
+                codeParts.push(this.indent() + "}");
+                return codeParts.join("\n");
+            }
+
+            generateWhileLoop(node) {
+                const codeParts = [this.indent() + `while (${node.value}) {`];
+                this.indentLevel++;
+                
+                for (const child of node.children) {
+                    const generated = this.generateNode(child);
+                    if (generated.includes('\n')) {
+                        codeParts.push(generated);
+                    } else {
+                        codeParts.push(this.indent() + generated);
+                    }
+                }
+                
+                this.indentLevel--;
+                codeParts.push(this.indent() + "}");
+                return codeParts.join("\n");
+            }
+
+            generatePrint(node) {
+                const value = node.value.trim();
+                if (value.startsWith('"') && value.endsWith('"') || 
+                    value.startsWith("'") && value.endsWith("'")) {
+                    return `cout << ${value} << endl;`;
+                }
+                return `cout << ${value} << endl;`;
+            }
+
+            generateAssignment(node) {
+                const varName = node.value;
+                const expression = node.children[0].value;
+                
+                if (!this.variables.has(varName)) {
+                    this.variables.add(varName);
+                    // Simple type inference
+                    if (expression.startsWith('"') && expression.endsWith('"') || 
+                        expression.startsWith("'") && expression.endsWith("'")) {
+                        return `string ${varName} = ${expression};`;
+                    } else if (expression.includes('.')) {
+                        return `double ${varName} = ${expression};`;
+                    } else {
+                        return `int ${varName} = ${expression};`;
+                    }
+                }
+                return `${varName} = ${expression};`;
+            }
+        }
+
+        function generateJs(ast) {
+            const generator = new JsGenerator();
+            return generator.generateProgram(ast);
+        }
+
+        function generateCpp(ast) {
+            const generator = new CppGenerator();
+            return generator.generateProgram(ast);
+        }
+
+    
+        const App = () => {
+            const [pseudocode, setPseudocode] = React.useState('SET counter = 1\nWHILE counter <= 5 DO\n    PRINT counter\n    SET counter = counter + 1\nENDWHILE');
+            const [output, setOutput] = React.useState('');
+            const [error, setError] = React.useState('');
+
+            const handleValidate = () => {
+                setError('');
+                setOutput('');
+                const result = validateSyntax(pseudocode);
+                if (!result.is_valid) {
+                    setError(result.error);
+                } else {
+                    setOutput('✅ Finally!,Pseudocode is valid!');
+                }
+            };
+
+            const handleGenerateJs = () => {
+                setError('');
+                setOutput('');
+                try {
+                    const result = validateSyntax(pseudocode);
+                    if (!result.is_valid) {
+                        setError(result.error);
+                        return;
+                    }
+                    const parser = new Parser();
+                    const ast = parser.parse(pseudocode);
+                    const jsCode = generateJs(ast);
+                    setOutput(jsCode);
+                } catch (e) {
+                    setError(e.message);
+                }
+            };
+
+            const handleGenerateCpp = () => {
+                setError('');
+                setOutput('');
+                try {
+                    const result = validateSyntax(pseudocode);
+                    if (!result.is_valid) {
+                        setError(result.error);
+                        return;
+                    }
+                    const parser = new Parser();
+                    const ast = parser.parse(pseudocode);
+                    const cppCode = generateCpp(ast);
+                    setOutput(cppCode);
+                } catch (e) {
+                    setError(e.message);
+                }
+            };
+
+            const handleClear = () => {
+                setPseudocode('');
+                setOutput('');
+                setError('');
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+                    <h1 className="text-3xl font-bold mb-6 text-center text-gray-800">Pseudocode to Syntax Generator</h1>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div>
+                            <label className="block text-gray-700 font-semibold mb-2">Likho Pseudocode:</label>
+                            <textarea
+                                className="w-full h-64 p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+                                value={pseudocode}
+                                onChange={(e) => setPseudocode(e.target.value)}
+                                placeholder="yaha pe text likhna hai "
+                            ></textarea>
+                            
+                            <div className="flex flex-wrap gap-2 mt-4">
+                                <button
+                                    className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+                                    onClick={handleValidate}
+                                >
+                                    Validate
+                                </button>
+                                <button
+                                    className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
+                                    onClick={handleGenerateJs}
+                                >
+                                    Generate JavaScript
+                                </button>
+                                <button
+                                    className="px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 transition-colors"
+                                    onClick={handleGenerateCpp}
+                                >
+                                    Generate C++
+                                </button>
+                                <button
+                                    className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
+                                    onClick={handleClear}
+                                >
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label className="block text-gray-700 font-semibold mb-2">Output:</label>
+                            {error && (
+                                <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-md mb-4">
+                                    <div className="font-semibold">Error:</div>
+                                    <div className="mt-1">{error}</div>
+                                </div>
+                            )}
+                            {output && (
+                                <div className="p-4 bg-gray-50 border border-gray-200 rounded-md h-64 overflow-auto">
+                                    <pre className="text-sm font-mono whitespace-pre-wrap">{output}</pre>
+                                </div>
+                            )}
+                            {!output && !error && (
+                                <div className="p-4 bg-gray-50 border border-gray-200 rounded-md h-64 flex items-center justify-center text-gray-500">
+                                    Generated Syntax yaha dikhega...
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                       <center> <h3 className="font-semibold text-blue-800 mb-2">Iss format me Syntax likhna hai(abhi expand karenge) </h3> </center>
+                        <div className="text-sm text-blue-700 space-y-1">
+                            <div><strong>Variables:</strong> SET variable = value | LET variable = value</div>
+                            <div><strong>Print:</strong> PRINT value</div>
+                            <div><strong>Conditions:</strong> IF condition THEN ... ELSE ... ENDIF</div>
+                            <div><strong>Loops:</strong> WHILE condition DO ... ENDWHILE</div>
+                            <div><strong>Comments:</strong> # This is a comment</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
